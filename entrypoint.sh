@@ -25,7 +25,6 @@ fi
 
 opts=(
 	dc_local_interfaces "[0.0.0.0]:${PORT:-25} ; [::0]:${PORT:-25}"
-	dc_other_hostnames ''
 	dc_relay_nets "$(ip addr show dev eth0 | awk '$1 == "inet" { print $2 }' | xargs | sed 's/ /:/g')${RELAY_NETWORKS}"
 )
 
@@ -33,36 +32,9 @@ if [ "$DISABLE_IPV6" ]; then
         echo 'disable_ipv6=true' >> /etc/exim4/exim4.conf.localmacros
 fi
 
-if [ "$GMAIL_USER" -a "$GMAIL_PASSWORD" ]; then
+if [ "$DOMAINS" ]; then
 	opts+=(
-		dc_eximconfig_configtype 'smarthost'
-		dc_smarthost 'smtp.gmail.com::587'
-	)
-	echo "*.google.com:$GMAIL_USER:$GMAIL_PASSWORD" > /etc/exim4/passwd.client
-elif [ "$SES_USER" -a "$SES_PASSWORD" ]; then
-	opts+=(
-		dc_eximconfig_configtype 'smarthost'
-		dc_smarthost "email-smtp.${SES_REGION:=us-east-1}.amazonaws.com::${SES_PORT:=587}"
-	)
-	echo "*.amazonaws.com:$SES_USER:$SES_PASSWORD" > /etc/exim4/passwd.client
-# Allow to specify an arbitrary smarthost.
-# Parameters: SMARTHOST_USER, SMARTHOST_PASSWORD: authentication parameters
-# SMARTHOST_ALIASES: list of aliases to puth auth data for (semicolon separated)
-# SMARTHOST_ADDRESS, SMARTHOST_PORT: connection parameters.
-elif [ "$SMARTHOST_ADDRESS" ] ; then
-	opts+=(
-		dc_eximconfig_configtype 'smarthost'
-		dc_smarthost "${SMARTHOST_ADDRESS}::${SMARTHOST_PORT-25}"
-	)
-	rm -f /etc/exim4/passwd.client
-	if [ "$SMARTHOST_ALIASES" -a "$SMARTHOST_USER" -a "$SMARTHOST_PASSWORD" ] ; then
-		echo "$SMARTHOST_ALIASES;" | while read -d ";" alias; do
-			echo "${alias}:$SMARTHOST_USER:$SMARTHOST_PASSWORD" >> /etc/exim4/passwd.client
-		done
-	fi
-elif [ "$RELAY_DOMAINS" ]; then
-	opts+=(
-		dc_relay_domains "${RELAY_DOMAINS}"
+		dc_other_hostnames "${DOMAINS}"
 		dc_eximconfig_configtype 'internet'
 	)
 else
@@ -71,10 +43,15 @@ else
 	)
 fi
 
-# allow to add additional macros by bind-mounting a file
-if [ -f /etc/exim4/_docker_additional_macros ]; then
-	cat /etc/exim4/_docker_additional_macros >> /etc/exim4/exim4.conf.localmacros
-fi
+echo "SYSTEM_ALIASES_PIPE_TRANSPORT = address_pipe" >> /etc/exim4/exim4.conf.localmacros
+
+# Create our watchperson user account
+USER_ID=${UID:-9001}
+echo "Creating watchperson with UID $USER_ID..."
+useradd --home /mail --system --uid $USER_ID watchperson
+
+# Set up ripmail alias for our watchperson user 
+echo "watchperson: |/bin/ripmail.sh" >> /etc/aliases
 
 /bin/set-exim4-update-conf "${opts[@]}"
 
